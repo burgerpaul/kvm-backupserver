@@ -1,0 +1,14 @@
+- src: https://github.com/burgerpaul/initial-setup.git
+  name: initial-setup
+
+- src: https://github.com/burgerpaul/chronyclient.git
+  name: chronyclient
+
+- src: https://github.com/stuvusIT/smartd.git
+  name: smartd
+
+- src: https://github.com/lukas-bednar/ansible-role-nested-virtualization.git
+  name: ansible-role-nested-virtualization
+
+- src: https://github.com/burgerpaul/config_interface.git
+  name: config-interfaces  

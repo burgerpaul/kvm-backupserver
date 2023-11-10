@@ -1,0 +1,309 @@
+---
+- name: Configure Server as KVM-host
+  #hosts: kvmhost
+  hosts: pbkvmhost01.burger1.de
+  roles:
+  - role: initial-setup
+    staticip: "yes"
+  - role: chronyserver
+    network: 192.168.0.0/21
+  - role: ansible-role-nested-virtualization
+    nested_virtualization_state: enabled
+  - role: smartd
+    smartd_devices:
+      /dev/sda:
+        check_type: permissive
+        test_schedule: L/../../7/04
+        temperature_report_diff: 5
+      /dev/sdb:
+        check_type: permissive
+        test_schedule: L/../../7/04
+        temperature_report_diff: 5
+      /dev/sdc:
+        check_type: permissive
+        test_schedule: L/../../7/04
+        temperature_report_diff: 5
+      DEVICESCAN:
+        non_smart_settings:
+          - lookahead,on
+          - wcache,off
+          - standby,off
+          - apm,254
+    smartd_default_mail_recipients: [ root@localhost ]
+
+  - role: config-interfaces
+    config_network_bonds: false
+    config_network_bridges: true
+    config_network_interfaces: true
+    enable_configured_interfaces_after_defining: true
+    network_bridges:
+      - name: intern
+        address: "{{ ansible_default_ipv4.address }}"
+        netmask: "{{ ansible_default_ipv4.netmask }}"
+        configure: true
+        enable: false
+        comment: Bridge Intranet
+        method: static
+        netmask_cidr: 21
+        gateway: "{{ ansible_default_ipv4.gateway }}"
+        parameters:
+          - param: bridge_stp
+            val: off
+          - param: bridge_fd
+            val: 1
+        ports:
+          - eno1
+      - name: extern
+        configure: true
+        enable: true
+        comment: Bridge Internet
+        method: manual
+        parameters:
+          - param: bridge_stp
+            val: off
+          - param: bridge_fd
+            val: 1
+        ports:
+#          - enp2s0
+          - eno1.3
+      - name: dmz
+        configure: true
+        enable: true
+        comment: Bridge DMZ
+        method: manual
+        parameters:
+          - param: bridge_stp
+            val: off
+          - param: bridge_fd
+            val: 1
+        ports:
+          - eno1.4
+      - name: wlan
+        configure: true
+        enable: true
+        comment: Bridge Internet
+        method: manual
+        parameters:
+          - param: bridge_stp
+            val: off
+          - param: bridge_fd
+            val: 1
+        ports:
+          - none
+      - name: monitor
+        configure: true
+        enabled: true 
+        comment: Bridge for monitoring traffic
+        method: manual
+        parameters:
+          - param: bridge_stp
+            val: off
+          - param: bridge_fd
+            val: 1
+        ports:
+          - eno1.6
+    network_interfaces:
+      - name: eno1
+        configure: true
+        comment: Connected to Intranet
+        method: manual
+      - name: enp2s0
+        configure: true
+        comment: Connected to Internet
+        method: manual
+      - name: eno1.3
+        configure: true
+        comment: Connected to Internet
+        method: manual
+      - name: eno1.4
+        configure: true
+        comment: Connected to DMZ
+        method: manual
+      - name: eno1.6
+        configure: true
+        comment: Connected to monitoring network
+        method: manual
+
+  tasks:
+      - name: Install Additional Packages (freeipmi,xfs)
+        package:
+          name: "{{ item }}"
+          state: present
+        loop:
+          - xfsprogs
+          - ipmitool
+          - gawk
+          - osinfo-db
+      - name: Create VG on HD
+        lvg:
+          pvs: "/dev/sdc"
+          vg: "vg{{ ansible_hostname }}hd00"
+          force: no
+
+      - name: Create LV On HD
+        lvol:
+          vg: "vg{{ ansible_hostname }}hd00"
+          lv: vmpoolhd00
+          size: 50%FREE
+          active: yes
+          force: no
+          shrink: no
+          state: present
+
+      - name: Crate LV isdodata on HD
+        lvol:
+          vg: "vg{{ ansible_hostname }}hd00"
+          lv: lvisodata
+          size: 50000
+          active: yes
+          force: no
+          shrink: no
+          state: present
+
+      - name: Create VG on SSD
+        lvg:
+          pvs: "/dev/sda"
+          vg: "vg{{ ansible_hostname }}ssd00"
+          force: no
+
+      - name: Create LV on SSD
+        lvol:
+          vg: "vg{{ ansible_hostname }}ssd00"
+          lv: vmpoolssd00
+          size: "200000"
+          size: "200000"
+          active: yes
+          force: no
+          shrink: no
+          state: present
+
+      - name: Create FS
+        filesystem:
+          fstype: xfs
+          dev: "{{ item }}"
+          force: no
+        loop:
+          - "/dev/vg{{ ansible_hostname }}hd00/vmpoolhd00"
+          - "/dev/vg{{ ansible_hostname }}hd00/lvisodata"
+          - "/dev/vg{{ ansible_hostname }}ssd00/vmpoolssd00"
+
+      - name: Create Mountpoint
+        file:
+          path: '{{ item }}'
+          state: directory
+          mode: 0755
+        loop: 
+          - "/srv/vmpoolssd00"
+          - "/srv/vmpoolhd00"
+          - "/srv/isopool"
+
+      - name: Edit Fstab For vmpoolssd00
+        mount:
+          state: mounted
+          src: "/dev/vg{{ ansible_hostname }}ssd00/vmpoolssd00"
+          path: "/srv/vmpoolssd00"
+          opts: noatime
+          fstype: xfs
+
+      - name: Edit Fstab For Vmpoolhd00
+        mount:
+          state: mounted
+          src: "/dev/vg{{ ansible_hostname }}hd00/vmpoolhd00"
+          path: "/srv/vmpoolhd00"
+          opts: noatime
+          fstype: xfs
+
+      - name: Edit Fstab For Isopool
+        mount:
+          state: mounted
+          src: "/dev/vg{{ ansible_hostname }}hd00/lvisodata"
+          path: "/srv/isopool"
+          opts: noatime
+          fstype: xfs
+
+      - name: Remove Netcat Traditional
+        package:
+          name: netcat-traditional
+          state: absent
+
+      - name: Install Netcat Openbsd
+        package:
+          name: netcat-openbsd
+          state: present
+
+      - name: Update Alternatives For Python
+        alternatives:
+          link: "/usr/bin/python"
+          name: python
+          path:  "/usr/bin/python3"
+
+      - name: Install KVM
+        include_role:
+          name: kvm
+        vars:
+            kvm_disable_apparmor: false
+            kvm_config: true
+            kvm_allow_root_ssh: true
+            kvm_config_virtual_networks: true
+            kvm_config_storage_pools: true
+            kvm_enable_libvirtd_syslog: true
+            kvm_images_path: /srv/vmpoolssd00
+            kvm_listen_addr: "{{ ansible_default_ipv4.address }}"
+            kvm_virtual_networks:
+              - name: intern
+                mode: bridge
+                bridge_name: intern
+                autostart: true
+                state: active
+                trunk: false
+              - name: extern
+                mode: bridge
+                bridge_name: extern
+                autostart: true
+                state: active
+                trunk: false
+              - name: dmz
+                mode: bridge
+                bridge_name: dmz
+                autostart: true
+                state: active
+                trunk: false
+              - name: wlan
+                mode: bridge
+                bridge_name: wlan
+                autostart: true
+                state: active
+                trunk: false
+              - name: isolated
+                mode: private
+                bridge_name: virbr1
+                autostart: true
+                enable_dhcp: true
+                pri_domain_name: isolated
+                pri_dns: 8.8.8.8
+                sec_dns: 8.8.4.4
+                dhcp_gateway: 192.168.254.1
+                dhcp_scope_start: 192.168.254.128
+                dhcp_scope_end: 192.168.254.200
+                dhcp_netmask: 255.255.255.0
+                state: active
+                trunk: false
+              - name: monitor
+                mode: bridge
+                bridge_name: monitor
+                autostart: true
+                state: active
+                trunk: false
+            kvm_storage_pools:
+              - name: vmpoolssd00
+                path: /srv/vmpoolssd00
+                autostart: true
+                state: active
+              - name: vmpoolhd00
+                path: /srv/vmpoolhd00
+                autostart: true
+                state: active
+              - name: isopool
+                path: /srv/isopool
+                autostart: true
+                state: active
