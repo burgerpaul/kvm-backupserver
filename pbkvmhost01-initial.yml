@@ -1,0 +1,6 @@
+---
+- name: Configure Server as KVM-host
+  hosts: remote
+  roles:
+  - role: initial-setup
+    staticip: "yes"
